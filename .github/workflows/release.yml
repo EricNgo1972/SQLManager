@@ -11,7 +11,7 @@ on:
           - windows
           - linux
       version:
-        description: Release version (example: 1.0.0)
+        description: Release version 
         required: true
         type: string
 
