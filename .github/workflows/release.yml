@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_os:
+        description: Target runtime to publish
+        required: true
+        type: choice
+        options:
+          - windows
+          - linux
+      version:
+        description: Release version (example: 1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    env:
+      PROJECT_PATH: SQLManager.csproj
+      APP_NAME: SQLManager
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve publish settings
+        id: settings
+        shell: bash
+        run: |
+          if [ "${{ github.event.inputs.target_os }}" = "windows" ]; then
+            echo "runtime=win-x64" >> "$GITHUB_OUTPUT"
+            echo "archive_ext=zip" >> "$GITHUB_OUTPUT"
+            echo "asset_name=${APP_NAME}-${{ github.event.inputs.version }}-win-x64.zip" >> "$GITHUB_OUTPUT"
+          else
+            echo "runtime=linux-x64" >> "$GITHUB_OUTPUT"
+            echo "archive_ext=tar.gz" >> "$GITHUB_OUTPUT"
+            echo "asset_name=${APP_NAME}-${{ github.event.inputs.version }}-linux-x64.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      - name: Publish
+        run: >
+          dotnet publish ${{ env.PROJECT_PATH }}
+          -c Release
+          -r ${{ steps.settings.outputs.runtime }}
+          --self-contained false
+          /p:Version=${{ github.event.inputs.version }}
+          -o publish
+
+      - name: Package Windows artifact
+        if: github.event.inputs.target_os == 'windows'
+        shell: bash
+        run: |
+          cd publish
+          7z a "../${{ steps.settings.outputs.asset_name }}" ./*
+
+      - name: Package Linux artifact
+        if: github.event.inputs.target_os == 'linux'
+        shell: bash
+        run: |
+          tar -C publish -czf "${{ steps.settings.outputs.asset_name }}" .
+
+      - name: Create Git tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create v${{ github.event.inputs.version }}
+          ${{ steps.settings.outputs.asset_name }}
+          --title "v${{ github.event.inputs.version }}"
+          --generate-notes
