@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <style>
+        html, body {
+            margin: 0;
+            min-height: 100%;
+            background:
+                radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 24%),
+                radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 22%),
+                linear-gradient(180deg, #020617 0%, #0b1220 100%);
+            color: #e5edf7;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .app-loading {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: grid;
+            place-items: center;
+            background:
+                radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 24%),
+                linear-gradient(180deg, rgba(2, 6, 23, 0.98) 0%, rgba(11, 18, 32, 0.98) 100%);
+            transition: opacity 180ms ease;
+        }
+
+        .app-loading-hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .app-loading-card {
+            display: grid;
+            justify-items: center;
+            gap: 1rem;
+            padding: 1.5rem 1.75rem;
+            border: 1px solid #22304a;
+            border-radius: 18px;
+            background: rgba(15, 23, 42, 0.92);
+            box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
+        }
+
+        .app-loading-card p {
+            margin: 0;
+            color: #94a3b8;
+            font-size: 0.95rem;
+        }
+
+        .app-loading-spinner {
+            width: 2.8rem;
+            height: 2.8rem;
+            border: 4px solid rgba(148, 163, 184, 0.2);
+            border-top-color: #38bdf8;
+            border-radius: 50%;
+            animation: app-spin 900ms linear infinite;
+        }
+
+        @@keyframes app-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+    <link rel="stylesheet" href="app.css" />
+    <link rel="icon" href="data:," />
+    <HeadOutlet @rendermode="new InteractiveServerRenderMode()" />
+</head>
+<body>
+    <div id="app-loading" class="app-loading">
+        <div class="app-loading-card">
+            <div class="app-loading-spinner" aria-hidden="true"></div>
+            <p>Loading SQL Database Manager...</p>
+        </div>
+    </div>
+    <Routes @rendermode="new InteractiveServerRenderMode()" />
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        (function () {
+            const loader = document.getElementById('app-loading');
+
+            function hideLoader() {
+                if (!loader) {
+                    return;
+                }
+
+                loader.classList.add('app-loading-hidden');
+                window.setTimeout(() => loader.remove(), 250);
+            }
+
+            const observer = new MutationObserver(() => {
+                if (document.querySelector('.page-shell')) {
+                    hideLoader();
+                    observer.disconnect();
+                }
+            });
+
+            observer.observe(document.body, { childList: true, subtree: true });
+
+            Blazor.start()
+                .then(hideLoader)
+                .catch(() => {
+                    if (loader) {
+                        loader.querySelector('p').textContent = 'Still loading application...';
+                    }
+                });
+        })();
+    </script>
+</body>
+</html>

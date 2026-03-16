@@ -1,0 +1,270 @@
+@page "/dashboard"
+@inject IDatabaseAdminService DatabaseAdminService
+@inject IJSRuntime JSRuntime
+
+<PageTitle>SQL Database Manager</PageTitle>
+
+<div class="page-actions">
+    <button class="btn btn-primary" @onclick="RefreshAllAsync" disabled="@_isRefreshingAll">
+        @(_isRefreshingAll ? "Refreshing..." : "Refresh All")
+    </button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_pageError))
+{
+    <div class="alert alert-error">@_pageError</div>
+}
+
+@if (_serverStates.Count == 0)
+{
+    <div class="server-card">
+        <p>Loading configured SQL Servers...</p>
+    </div>
+}
+else
+{
+    <div class="server-grid">
+        @foreach (var serverState in _serverStates)
+        {
+            <section class="server-card">
+                <div class="server-card-header">
+                    <div>
+                        <p class="server-key">@serverState.Server.Key</p>
+                        <h2>@serverState.Server.DisplayLabel</h2>
+                    </div>
+                    <button class="btn btn-secondary"
+                            @onclick="() => RefreshServerAsync(serverState.Server.Key)"
+                            disabled="@serverState.IsBusy">
+                        @(serverState.IsBusy ? "Working..." : "Refresh")
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(serverState.Message))
+                {
+                    <div class="alert @(serverState.HasError ? "alert-error" : "alert-success")">
+                        @serverState.Message
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(serverState.Server.ConfigurationError))
+                {
+                    <div class="alert alert-error">@serverState.Server.ConfigurationError</div>
+                }
+
+                @if (!serverState.Server.IsAvailable)
+                {
+                    <p>This server entry is disabled until the connection string is fixed.</p>
+                }
+                else if (serverState.IsLoading)
+                {
+                    <p>Loading databases...</p>
+                }
+                else if (!string.IsNullOrWhiteSpace(serverState.LoadError))
+                {
+                    <div class="alert alert-error">@serverState.LoadError</div>
+                }
+                else if (serverState.Databases.Count == 0)
+                {
+                    <p>No user databases found.</p>
+                }
+                else
+                {
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Database</th>
+                                    <th>Status</th>
+                                    <th>Size</th>
+                                    <th class="actions-col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var database in serverState.Databases)
+                                {
+                                    <tr>
+                                        <td>@database.DatabaseName</td>
+                                        <td>
+                                            <span class="status-badge @(database.IsOnline ? "status-online" : "status-offline")">
+                                                @database.State
+                                            </span>
+                                        </td>
+                                        <td>@database.SizeDisplay</td>
+                                        <td class="actions-col">
+                                            <button class="btn btn-success"
+                                                    @onclick="() => BringOnlineAsync(serverState.Server.Key, database.DatabaseName)"
+                                                    disabled="@(!database.IsOffline || serverState.IsBusy)">
+                                                Bring Online
+                                            </button>
+                                            <button class="btn btn-danger"
+                                                    @onclick="() => TakeOfflineAsync(serverState.Server.Key, database.DatabaseName)"
+                                                    disabled="@(!database.IsOnline || serverState.IsBusy)">
+                                                Take Offline
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+        }
+    </div>
+}
+
+@code {
+    private readonly List<ServerViewState> _serverStates = [];
+    private bool _isRefreshingAll;
+    private string? _pageError;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        await LoadServersAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadServersAsync()
+    {
+        try
+        {
+            var servers = await DatabaseAdminService.GetServersAsync();
+            _serverStates.Clear();
+            _serverStates.AddRange(servers.Select(server => new ServerViewState(server)));
+            await RefreshAllAsync();
+        }
+        catch (Exception ex)
+        {
+            _pageError = ex.Message;
+        }
+    }
+
+    private async Task RefreshAllAsync()
+    {
+        _isRefreshingAll = true;
+        _pageError = null;
+
+        try
+        {
+            await Task.WhenAll(_serverStates.Select(state => RefreshServerInternalAsync(state, preserveMessage: true)));
+        }
+        catch
+        {
+            _pageError = "One or more servers could not be refreshed. Check each panel for details.";
+        }
+        finally
+        {
+            _isRefreshingAll = false;
+        }
+    }
+
+    private Task RefreshServerAsync(string serverKey)
+    {
+        var state = FindState(serverKey);
+        return RefreshServerInternalAsync(state, preserveMessage: false);
+    }
+
+    private async Task RefreshServerInternalAsync(ServerViewState state, bool preserveMessage)
+    {
+        if (!state.Server.IsAvailable)
+        {
+            state.IsLoading = false;
+            state.IsBusy = false;
+            return;
+        }
+
+        state.IsLoading = true;
+        state.IsBusy = true;
+        state.LoadError = null;
+        if (!preserveMessage)
+        {
+            state.Message = null;
+            state.HasError = false;
+        }
+
+        try
+        {
+            var databases = await DatabaseAdminService.GetDatabasesAsync(state.Server.Key);
+            state.Databases.Clear();
+            state.Databases.AddRange(databases);
+        }
+        catch (Exception ex)
+        {
+            state.LoadError = ex.Message;
+        }
+        finally
+        {
+            state.IsLoading = false;
+            state.IsBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task BringOnlineAsync(string serverKey, string databaseName)
+    {
+        var state = FindState(serverKey);
+        await ExecuteActionAsync(
+            state,
+            async () => await DatabaseAdminService.BringOnlineAsync(serverKey, databaseName),
+            $"Database '{databaseName}' is now online.");
+    }
+
+    private async Task TakeOfflineAsync(string serverKey, string databaseName)
+    {
+        var confirmed = await JSRuntime.InvokeAsync<bool>("confirm",
+            $"Take database '{databaseName}' offline on server '{serverKey}'? Active connections will be disconnected.");
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var state = FindState(serverKey);
+        await ExecuteActionAsync(
+            state,
+            async () => await DatabaseAdminService.TakeOfflineAsync(serverKey, databaseName),
+            $"Database '{databaseName}' is now offline.");
+    }
+
+    private async Task ExecuteActionAsync(ServerViewState state, Func<Task> action, string successMessage)
+    {
+        state.IsBusy = true;
+        state.Message = null;
+        state.HasError = false;
+
+        try
+        {
+            await action();
+            state.Message = successMessage;
+            await RefreshServerInternalAsync(state, preserveMessage: true);
+        }
+        catch (Exception ex)
+        {
+            state.Message = ex.Message;
+            state.HasError = true;
+        }
+        finally
+        {
+            state.IsBusy = false;
+        }
+    }
+
+    private ServerViewState FindState(string serverKey) =>
+        _serverStates.First(state => string.Equals(state.Server.Key, serverKey, StringComparison.OrdinalIgnoreCase));
+
+    private sealed class ServerViewState(SqlServerTarget server)
+    {
+        public SqlServerTarget Server { get; } = server;
+        public List<DatabaseListItem> Databases { get; } = [];
+        public bool IsLoading { get; set; } = true;
+        public bool IsBusy { get; set; }
+        public bool HasError { get; set; }
+        public string? LoadError { get; set; }
+        public string? Message { get; set; }
+    }
+}
