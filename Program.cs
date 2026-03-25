@@ -4,6 +4,10 @@ using SQLManager.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddWindowsService();
+
+builder.Services.AddSystemd();
+
 builder.Services
     .AddRazorComponents()
     .AddInteractiveServerComponents();
